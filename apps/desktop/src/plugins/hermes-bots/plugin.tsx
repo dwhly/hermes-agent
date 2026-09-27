@@ -458,6 +458,7 @@ export default {
       // a stranded BOTS tab on screen. The narrow edge overlay mirrors the
       // zone's tab strip, so the pane stays reachable while collapsed.
       data: {
+        connectionScoped: true,
         placement: 'left',
         width: '260px',
         collapsible: true,
