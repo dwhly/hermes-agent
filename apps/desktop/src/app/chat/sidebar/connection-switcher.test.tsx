@@ -1,11 +1,15 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render as renderComponent, screen, waitFor } from '@testing-library/react'
 import { atom } from 'nanostores'
+import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { SidebarProvider } from '@/components/ui/sidebar'
 import type { DesktopConnectionsRegistry } from '@/global'
 import { $findInPage } from '@/store/find-in-page'
 
 import { ConnectionSwitcher } from './connection-switcher'
+
+const render = (ui: ReactNode) => renderComponent(<SidebarProvider>{ui}</SidebarProvider>)
 
 // Radix menus use pointer capture; jsdom does not implement it.
 Element.prototype.hasPointerCapture ??= () => false
@@ -25,28 +29,33 @@ vi.mock('@/store/connections', () => ({
   selectConnection: vi.fn(async () => undefined)
 }))
 
-vi.mock('@/i18n', () => ({
-  useI18n: () => ({
-    t: {
-      profiles: {
-        switchConnectionFailed: (name: string) => `Could not connect to ${name}`,
-        switchToConnection: (name: string) => `Switch to ${name}`,
-        connectGateway: 'Manage gateways…'
-      },
-      settings: {
-        connections: {
-          noSearchResults: 'No gateways match your search.',
-          searchPlaceholder: 'Search gateways…',
-          kindCloud: 'Hermes Cloud',
-          kindLocal: 'Local',
-          kindRemote: 'Remote gateway',
-          kindSsh: 'SSH',
-          title: 'Registered gateways'
+vi.mock('@/i18n', async importOriginal => {
+  const { en } = await import('@/i18n/en')
+  return {
+    ...(await importOriginal<typeof import('@/i18n')>()),
+    useI18n: () => ({
+      t: {
+        ...en,
+        profiles: {
+          switchConnectionFailed: (name: string) => `Could not connect to ${name}`,
+          switchToConnection: (name: string) => `Switch to ${name}`,
+          connectGateway: 'Manage gateways…'
+        },
+        settings: {
+          connections: {
+            noSearchResults: 'No gateways match your search.',
+            searchPlaceholder: 'Search gateways…',
+            kindCloud: 'Hermes Cloud',
+            kindLocal: 'Local',
+            kindRemote: 'Remote gateway',
+            kindSsh: 'SSH',
+            title: 'Registered gateways'
+          }
         }
       }
-    }
-  })
-}))
+    })
+  }
+})
 
 const connectionStore = await import('@/store/connections')
 const $activeConnectionId = connectionStore.$activeConnectionId as ReturnType<typeof atom<null | string>>
@@ -63,7 +72,7 @@ const connection = (id: string, label: string, kind: 'local' | 'remote' = 'remot
   tokenSet: false
 })
 
-const registry = (connections: ReturnType<typeof connection>[]): DesktopConnectionsRegistry => ({
+const registry = (connections: DesktopConnectionsRegistry['connections']): DesktopConnectionsRegistry => ({
   connections,
   primary: connections[0]?.id ?? 'local',
   secureTokenStorage: true,
@@ -87,21 +96,25 @@ describe('ConnectionSwitcher', () => {
     expect(screen.queryByRole('group', { name: 'Registered gateways' })).toBeNull()
   })
 
-  it('shows a named source selector instead of profile-like gateway glyphs', () => {
+  it.each([false, true])('switches gateways and opens management (compact=%s)', compact => {
     $connectionsRegistry.set(
       registry([
         connection('local', 'This device', 'local'),
-        connection('homelab', 'Homelab'),
+        { ...connection('homelab', 'Homelab'), url: 'https://lab.example.com' },
         connection('work-vps', 'Work VPS')
       ])
     )
-    render(<ConnectionSwitcher onConnect={onConnect} />)
+    render(<ConnectionSwitcher compact={compact} onConnect={onConnect} />)
 
     const trigger = screen.getByRole('button', { name: 'Registered gateways: This device' })
 
     expect(trigger.textContent).toContain('This device')
+    expect(trigger.title).toBe('This device')
+    expect(trigger.closest('[data-slot="connection-switcher"]')?.classList.contains('overflow-hidden')).toBe(false)
 
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+    expect(trigger.getAttribute('data-state')).toBe('open')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Homelab' }))
     expect(selectConnection).toHaveBeenCalledWith('homelab')
 
@@ -109,6 +122,11 @@ describe('ConnectionSwitcher', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Manage gateways…' }))
     expect(onConnect).toHaveBeenCalledTimes(1)
     expect(selectConnection).toHaveBeenCalledTimes(1)
+
+    act(() => $activeConnectionId.set('homelab'))
+    expect(screen.getByRole('button', { name: 'Registered gateways: Homelab' }).title).toBe(
+      'Homelab\nhttps://lab.example.com'
+    )
   })
 
   it('keeps source controls stable while a remote is opening', () => {
@@ -135,7 +153,7 @@ describe('ConnectionSwitcher', () => {
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
 
     expect(screen.queryByPlaceholderText('Search gateways…')).toBeNull()
-    expect(screen.getAllByRole('menuitemradio').map(item => item.textContent)).toEqual([
+    expect(screen.getAllByRole('menuitemradio').map(item => item.getAttribute('aria-label'))).toEqual([
       'This device',
       'alpha',
       'Studio 2',
@@ -167,7 +185,7 @@ describe('ConnectionSwitcher', () => {
 
     const search = screen.getByPlaceholderText('Search gateways…')
     expect(screen.getByRole('menuitem', { name: 'Manage gateways…' })).toBeTruthy()
-    expect(screen.getAllByRole('menuitemradio').map(item => item.textContent)).toEqual([
+    expect(screen.getAllByRole('menuitemradio').map(item => item.getAttribute('aria-label'))).toEqual([
       'This device',
       'Alpha',
       'Cloud lab',
@@ -179,7 +197,7 @@ describe('ConnectionSwitcher', () => {
     ])
 
     fireEvent.change(search, { target: { value: 'studio 10' } })
-    expect(screen.getAllByRole('menuitemradio').map(item => item.textContent)).toEqual(['Studio 10'])
+    expect(screen.getAllByRole('menuitemradio').map(item => item.getAttribute('aria-label'))).toEqual(['Studio 10'])
 
     const result = screen.getByRole('menuitemradio', { name: 'Studio 10' })
     fireEvent.keyDown(search, { key: 'ArrowDown' })
