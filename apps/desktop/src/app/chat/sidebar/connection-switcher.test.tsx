@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render as renderComponent, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render as renderComponent, screen, waitFor, within } from '@testing-library/react'
 import { atom } from 'nanostores'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SidebarProvider } from '@/components/ui/sidebar'
 import type { DesktopConnectionsRegistry } from '@/global'
 import { $findInPage } from '@/store/find-in-page'
+import { $machine } from '@/store/machine'
 
 import { ConnectionSwitcher } from './connection-switcher'
 
@@ -29,32 +30,11 @@ vi.mock('@/store/connections', () => ({
   selectConnection: vi.fn(async () => undefined)
 }))
 
-vi.mock('@/i18n', async importOriginal => {
+vi.mock(import('@/i18n'), async importOriginal => {
+  const actual = await importOriginal()
   const { en } = await import('@/i18n/en')
-  return {
-    ...(await importOriginal<typeof import('@/i18n')>()),
-    useI18n: () => ({
-      t: {
-        ...en,
-        profiles: {
-          switchConnectionFailed: (name: string) => `Could not connect to ${name}`,
-          switchToConnection: (name: string) => `Switch to ${name}`,
-          connectGateway: 'Manage gateways…'
-        },
-        settings: {
-          connections: {
-            noSearchResults: 'No gateways match your search.',
-            searchPlaceholder: 'Search gateways…',
-            kindCloud: 'Hermes Cloud',
-            kindLocal: 'Local',
-            kindRemote: 'Remote gateway',
-            kindSsh: 'SSH',
-            title: 'Registered gateways'
-          }
-        }
-      }
-    })
-  }
+
+  return { ...actual, useI18n: () => ({ ...actual.useI18n(), t: en }) }
 })
 
 const connectionStore = await import('@/store/connections')
@@ -85,6 +65,7 @@ afterEach(() => {
   $connectionsRegistry.set(null)
   $activeConnectionId.set('local')
   $pendingConnectionId.set(null)
+  $machine.set(null)
   $findInPage.set({ active: false, query: '', matchOrdinal: 0, matchCount: 0, focusRequest: 0 })
 })
 
@@ -96,7 +77,7 @@ describe('ConnectionSwitcher', () => {
     expect(screen.queryByRole('group', { name: 'Registered gateways' })).toBeNull()
   })
 
-  it.each([false, true])('switches gateways and opens management (compact=%s)', compact => {
+  it.each([false, true])('switches gateways and opens management (compact=%s)', async compact => {
     $connectionsRegistry.set(
       registry([
         connection('local', 'This device', 'local'),
@@ -109,7 +90,7 @@ describe('ConnectionSwitcher', () => {
     const trigger = screen.getByRole('button', { name: 'Registered gateways: This device' })
 
     expect(trigger.textContent).toContain('This device')
-    expect(trigger.title).toBe('This device')
+    expect(trigger.hasAttribute('title')).toBe(false)
     expect(trigger.closest('[data-slot="connection-switcher"]')?.classList.contains('overflow-hidden')).toBe(false)
 
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
@@ -124,10 +105,100 @@ describe('ConnectionSwitcher', () => {
     expect(selectConnection).toHaveBeenCalledTimes(1)
 
     act(() => $activeConnectionId.set('homelab'))
-    expect(screen.getByRole('button', { name: 'Registered gateways: Homelab' }).title).toBe(
-      'Homelab\nhttps://lab.example.com'
-    )
+    const remoteTrigger = screen.getByRole('button', { name: 'Registered gateways: Homelab' })
+    fireEvent.pointerMove(within(remoteTrigger).getByText('Homelab'), { pointerType: 'mouse' })
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('Homelab\nhttps://lab.example.com'))
   })
+
+  it.each([
+    { label: 'This device', hostname: 'h-mini2', name: 'h-mini2', suffix: '(this device)' },
+    { label: 'Studio', hostname: 'h-mini2', name: 'Studio', suffix: '(this device)' },
+    { label: 'This device', hostname: '', name: 'This device', suffix: '' }
+  ])('names the local device in every surface: $name', ({ label, hostname, name, suffix }) => {
+    $connectionsRegistry.set(registry([connection('local', label, 'local'), connection('remote', 'Work')]))
+    const { rerender } = render(<ConnectionSwitcher onConnect={onConnect} />)
+    act(() =>
+      $machine.set({
+        hostname,
+        ageDays: null,
+        arch: 'arm64',
+        locale: 'en',
+        model: '',
+        nvidia: false,
+        platform: 'darwin',
+        release: '',
+        username: ''
+      })
+    )
+
+    for (const compact of [false, true]) {
+      rerender(
+        <SidebarProvider>
+          <ConnectionSwitcher compact={compact} onConnect={onConnect} />
+        </SidebarProvider>
+      )
+      const fullName = [name, suffix].filter(Boolean).join(' ')
+      const trigger = screen.getByRole('button', { name: `Registered gateways: ${fullName}` })
+      expect(trigger.querySelector('[data-connection-name]')?.textContent).toBe(name)
+      expect(trigger.querySelector('[data-connection-suffix]')?.textContent ?? '').toBe(suffix)
+      fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+      const local = screen.getByRole('menuitemradio', { name: fullName })
+      expect(local.querySelector('[data-connection-name]')?.textContent).toBe(name)
+      expect(local.querySelector('[data-connection-suffix]')?.textContent ?? '').toBe(suffix)
+      expect(screen.getByRole('menuitemradio', { name: 'Work' }).querySelector('[data-connection-suffix]')).toBeNull()
+      fireEvent.keyDown(globalThis.document, { key: 'Escape' })
+    }
+
+    expect($connectionsRegistry.get()?.connections[0].label).toBe(label)
+  })
+
+  it.each(['local', 'remote'] as const)(
+    'reserves suffix and trailing controls while a long %s name truncates',
+    kind => {
+      const name = 'Studio workstation with an extraordinarily long device name 1234567890'
+      const entry = connection(kind, name, kind)
+      $connectionsRegistry.set(registry([entry, connection('other', 'Other')]))
+      $activeConnectionId.set(kind)
+      const { rerender } = render(<ConnectionSwitcher onConnect={onConnect} />)
+
+      for (const compact of [false, true]) {
+        rerender(
+          <SidebarProvider>
+            <ConnectionSwitcher compact={compact} onConnect={onConnect} />
+          </SidebarProvider>
+        )
+
+        const trigger = screen.getByRole('button', {
+          name: `Registered gateways: ${name}${kind === 'local' ? ' (this device)' : ''}`
+        })
+
+        fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+
+        const menuRow = screen.getByRole('menuitemradio', {
+          name: `${name}${kind === 'local' ? ' (this device)' : ''}`
+        })
+
+        for (const row of [trigger, menuRow]) {
+          const nameElement = row.querySelector('[data-connection-name]')!
+          expect(nameElement.textContent).toBe(name)
+          expect(nameElement.classList.contains('min-w-0')).toBe(true)
+          expect(nameElement.classList.contains('truncate')).toBe(true)
+          const suffix = row.querySelector('[data-connection-suffix]')
+
+          if (kind === 'local') {
+            expect(suffix?.textContent).toBe('(this device)')
+            expect(suffix?.classList.contains('shrink-0')).toBe(true)
+            expect(nameElement.contains(suffix)).toBe(false)
+          } else {
+            expect(suffix).toBeNull()
+          }
+        }
+
+        expect(trigger.querySelector('.codicon-chevron-down')?.classList.contains('shrink-0')).toBe(true)
+        fireEvent.keyDown(globalThis.document, { key: 'Escape' })
+      }
+    }
+  )
 
   it('keeps source controls stable while a remote is opening', () => {
     $connectionsRegistry.set(registry([connection('local', 'This device', 'local'), connection('homelab', 'Homelab')]))
@@ -259,7 +330,7 @@ describe('ConnectionSwitcher', () => {
 
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
     expect(screen.queryByRole('menuitemradio', { name: 'W2Probe' })).toBeNull()
-    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.keyDown(globalThis.document, { key: 'Escape' })
 
     act(() => $connectionsRegistry.set(after))
 
