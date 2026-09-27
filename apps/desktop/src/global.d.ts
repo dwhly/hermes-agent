@@ -674,6 +674,8 @@ export interface DesktopMachineProfile {
   /** Days since the OS created this user account; null when unknowable. */
   ageDays: null | number
   arch: string
+  /** Short OS hostname for display; never persisted as a connection label. */
+  hostname: string
   /** The OS display language (`app.getLocale()`, e.g. "ja", "pt-BR"); '' when
    *  unknowable. A first-run DEFAULT for the UI language, never a lock — the
    *  user's saved `display.language` always wins, and the picker still rules. */

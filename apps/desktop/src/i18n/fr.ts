@@ -1751,6 +1751,7 @@ export const fr = defineLocale({
       clear: 'Effacer'
     },
     connections: {
+      thisDeviceSuffix: '(cet appareil)',
       title: 'Connexions',
       intro:
         'Enregistrez tous les emplacements où vivent vos agents : cet appareil, les gateways distantes de votre réseau et les instances Hermes Cloud. Ils sont tous conservés ici.',

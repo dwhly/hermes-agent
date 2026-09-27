@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
+import { isIP } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
@@ -18266,9 +18267,14 @@ ipcMain.handle('hermes:machine:profile', async () => {
     // No account name to suggest — the guide simply asks.
   }
 
+  // Display-only short hostname (PR #125267): IP-style and localhost names fall back to "This device".
+  const fullHostname = os.hostname().trim()
+  const shortHostname = fullHostname.split('.')[0]
+
   return {
     ageDays,
     arch: process.arch,
+    hostname: isIP(fullHostname) || shortHostname.toLowerCase() === 'localhost' ? '' : shortHostname,
     // What the OS is set to, so a first run can open in the user's own
     // language instead of asking them to go and find the setting. Chromium
     // resolves this from the real OS preference (not the app's own bundle),
