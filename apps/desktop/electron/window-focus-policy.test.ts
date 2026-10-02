@@ -27,6 +27,28 @@ test('focus is only taken when the window does not already have it', () => {
   assert.equal(shouldFocusToTakeKeyboard({ isFocused: () => false }), true)
 })
 
+test('isFocused is invoked on the window itself, like a native BrowserWindow binding', () => {
+  // Real BrowserWindow methods need their receiver; called detached they throw
+  // "Object has been destroyed", which aborted ensureMainWindow on every
+  // second-instance launch so the app never came forward.
+  class ReceiverBoundWindow {
+    #focused: boolean
+    constructor(focused: boolean) {
+      this.#focused = focused
+    }
+    isFocused(): boolean {
+      if (!(this instanceof ReceiverBoundWindow)) {
+        throw new TypeError('Object has been destroyed')
+      }
+
+      return this.#focused
+    }
+  }
+
+  assert.equal(shouldFocusToTakeKeyboard(new ReceiverBoundWindow(false)), true)
+  assert.equal(shouldFocusToTakeKeyboard(new ReceiverBoundWindow(true)), false)
+})
+
 test('an already-focused window never pumps the OS foreground path', () => {
   // The #83998 regression: a redundant .focus() on a focused window still
   // runs SetForegroundWindow on Windows, dismissing another app's dialog.
