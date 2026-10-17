@@ -123,8 +123,6 @@ describe('ConnectionSwitcher', () => {
         ageDays: null,
         arch: 'arm64',
         locale: 'en',
-        model: '',
-        nvidia: false,
         platform: 'darwin',
         release: '',
         username: ''

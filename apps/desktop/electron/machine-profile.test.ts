@@ -46,9 +46,9 @@ it('registers the renderer channel and reports native machine facts with the OS 
     locale: 'fr-CA',
     platform: process.platform,
     release: os.release(),
-    username: os.userInfo().username
+    username: os.userInfo().username,
+    hostname: expect.any(String)
   })
-  expect(typeof result.hostname).toBe('string')
 })
 
 it.each([
